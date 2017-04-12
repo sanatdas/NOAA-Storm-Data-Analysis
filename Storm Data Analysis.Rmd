@@ -1,0 +1,181 @@
+---
+title: "NOAA Storm Data Analysis"
+author: "Sanat"
+date: "4/7/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Synopsis
+This project involves exploring the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database to identify the severe weather events in the USA. The aim of the analysis is to address the below questions:
+
+  *  Across the United States, which types of events are most harmful with respect to population health?
+  *  Across the United States, which types of events have the greatest economic consequences?
+  
+The project report covers the following:
+
+  *  Data Processing section: covers the process for data downloading, selecting the required attributes for processing and understanding the structure.
+  *  Result section: analyzes the data to find out
+    (1)  the types of events that are most harmful for population health. 
+    (2)  the types of events that have greatest economic consequences  
+ and summarizes the result.
+ 
+# Data Processing 
+
+### Load Required Libraries
+```{r, message=FALSE}
+library(dplyr)
+library(tidyr)
+library(sqldf)
+library(ggplot2)
+```
+
+### Load the data 
+The data set is downloaded from the site: https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2. 
+
+```{r, cache=TRUE}
+# if the zip file is not already downloaded, download the zip file
+if(!file.exists("data.csv.bz2")){
+        download.file("https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2",
+                      destfile = "data.csv.bz2")
+}
+# load the datafile into a data frame called "stormdataset"
+stormdata <- read.csv("data.csv.bz2")
+dim(stormdata)
+```
+There are total 902297 observations with 37 column attributes.
+
+#### Explore the downloaded data 
+```{r}
+str(stormdata)
+```
+
+### Data Processing For Events Relating to Population Health Impact
+The relevant columns relating to human health are EVTYPE, FATALITIES and INJURIES.
+Loading data for these attributes into a data frame "health_data1"
+
+```{r}
+health_data1 <- stormdata[,c("EVTYPE","FATALITIES","INJURIES")]
+summary(health_data1)
+```
+
+ Subset the data with non-zero Fatalities or Injuries 
+```{r}
+health_data <- health_data1[health_data1$FATALITIES !=0 | health_data1$INJURIES !=0,]
+```
+
+Calculate subtotal for Fatalities and Injuries by event type
+```{r, message=F, warning=F}
+pop_health <-sqldf('SELECT EVTYPE,SUM(FATALITIES),SUM(INJURIES) FROM health_data GROUP BY EVTYPE')
+names(pop_health)<-c("EVTYPE","FATALITIES","INJURIES")
+pop_health<-pop_health[order(pop_health$FATALITIES,decreasing =TRUE),]
+data1 <- group_by(pop_health,EVTYPE) %>%
+        summarise(health_impact=(sum(FATALITIES)+sum(INJURIES)),
+        Fatalities = sum(FATALITIES),
+        Injuries=sum(INJURIES))
+event_ord <- head(data1[order(desc(data1$health_impact)),],10)
+event_name <- as.character(event_ord$EVTYPE[order(desc(event_ord$health_impact))])
+event_ord$EVTYPE <- factor(event_name, event_name)
+events <- select(event_ord, EVTYPE, Fatalities:Injuries)
+events <- gather(events, "impact_type", "impact", Fatalities:Injuries)
+```
+
+### Data Processing For Events Relating to Economic Consequesces
+The relevant columns relating to economic consequences are EVTYPE,  PROPDMG, PROPDMGEXP, CROPDMG, CROPDMGEXP. Load data for these attributes into a data frame "eco_data1"
+```{r}
+eco_data1 <- stormdata[,c("EVTYPE","PROPDMG","PROPDMGEXP","CROPDMG","CROPDMGEXP")]
+```
+
+Subset the data with non-zero values
+```{r}
+eco_data <- eco_data1[eco_data1$PROPDMG !=0 | eco_data1$CROPDMG != 0,]
+```
+
+The below function converts the codes and values in expontial column to numeric values:
+```{r}
+data_exp<-function(exp){
+        if(is.na(exp)){
+                return(0)
+        }
+        if(is.numeric(exp)){
+                return(10^exp)
+        }
+        else if(exp == "B"){
+                return(1000000000)
+        }
+        else if(exp == "M" || exp =="m"){
+                return(1000000)
+        }
+        else if(exp == "H" || exp=="h"){
+                return(100)
+        }
+        else if(exp == "K" || exp == "k"){
+                return(1000)
+        }
+        else{
+                return(0)
+        }
+        
+}
+```
+
+Applying the function data_exp(), the cost for property damage, crop damage and total cost of damages are calculated:
+```{r}
+propexp <- sapply(eco_data$PROPDMGEXP,data_exp)
+cropexp <- sapply(eco_data$CROPDMGEXP,data_exp)
+costs<-data.frame(EVTYPE = eco_data$EVTYPE,PROPDMG=eco_data$PROPDMG*propexp,
+                  CROPDMG = eco_data$CROPDMG*cropexp,COST=eco_data$PROPDMG*propexp +
+                          eco_data$CROPDMG*cropexp)
+eco_cost <-sqldf('SELECT EVTYPE,SUM(PROPDMG),SUM(CROPDMG),SUM(COST) FROM costs GROUP BY EVTYPE')
+names(eco_cost)<-c("EVTYPE","PROPDMG","CROPDMG","TOTAL")
+eco_cost<-eco_cost[order(eco_cost$TOTAL,decreasing =TRUE),]
+data2 <- group_by(eco_cost,EVTYPE) %>%
+       summarise(TOTAL=(sum(PROPDMG)+sum(CROPDMG)),
+        property = sum(PROPDMG),
+        crop=sum(CROPDMG))
+event_ord2 <- head(data2[order(desc(data2$TOTAL)),],10)
+event_name2 <- as.character(event_ord2$EVTYPE[order(desc(event_ord2$TOTAL))])
+event_ord2$EVTYPE <- factor(event_name2, event_name2)
+events2 <- select(event_ord2, EVTYPE, property:crop)
+events2 <- gather(events2, "impact_type", "impact", property:crop)
+```
+
+     
+## Results
+
+### Population Health Impact
+
+#### Plot showing the types of events that are most harmful with respect to population health 
+
+```{r, fig.height= 5, fig.width=8}
+ggplot(data = events, aes(EVTYPE, impact, fill = impact_type)) + 
+        geom_bar(stat = "identity",position="dodge") + labs(x="Event Type", 
+                y= "Population Damage (Injuries + Fatalities)") + 
+        ggtitle("Population Health Impact -\n By Events (Injuries and Fatalities)")+
+        theme(plot.title = element_text(size = 16, face = "bold"))+
+        theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+        theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+As per the data demostrated by the above plot, Tornadoes are the most harmful events, both in  terms of fatalities and injuries. The next event that caused maximum harm is Excessive Heat.
+
+### Economic Impact
+
+#### Plot showing the types of events that have greatest economic consequences 
+```{r, fig.height=5,fig.width=8}
+ggplot(data = events2, aes(EVTYPE, impact, fill = impact_type)) + 
+        geom_bar(stat = "identity",position="dodge") + 
+        labs(x="Event Type", y= "Economic Consequences ( $ )") + 
+        ggtitle("Events with max Economic Consequences \n (Properties and Crop Damages)")+ 
+        theme(plot.title = element_text(size = 16, face = "bold"))+
+        theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+        theme(plot.title = element_text(hjust = 0.5))
+
+```
+        
+As per the data demostrated by the above plot, event that have maximum economic concequences is Flood, followed by Typhoon, Tornado and Storm Surge being the next most costly event types.
+
